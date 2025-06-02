@@ -1,0 +1,268 @@
+%% Analysis Script
+% Using .csv scripts from evaluatio computes average performance across
+% original and modified algorithm
+
+clc; clear;
+
+addpath('models');
+addpath('classes');
+addpath('evaluation');
+
+%% Prompt for Original-Only CSV
+[origFileName, origFilePath] = uigetfile('*.csv','Select the Original Code''s CSV');
+if isequal(origFileName,0)
+    error('No original code performance file selected, incoming scooter to shin.');
+end
+orig_csv_file = fullfile(origFilePath, origFileName);
+
+%% Prompt for Modified-Only CSV
+[modFileName, modFilePath] = uigetfile('*.csv','Select the Modified Code''s CSV');
+if isequal(modFileName,0)
+    error('No modified code performance file selected, incoming scooter to shin.');
+end
+mod_csv_file = fullfile(modFilePath, modFileName);
+
+%% Display & model flags
+DISP      = false;      % Display images for analysis
+USE_MODEL = true;       % Load the WB model to display images later
+HIST      = true;       % Show histogram of DeltaE (analyze fallback)
+
+
+in_base   = fullfile('..','Cube_input_images');
+gt_base   = fullfile('..','Cube_ground_truth_images');
+
+if USE_MODEL
+    load(fullfile('models','WB_model.mat'));
+    model.gamut_mapping = 1;
+end
+
+%% Read Original CSV 
+orig_data_full   = readtable(orig_csv_file);
+avg_mask_orig    = strcmp(orig_data_full.ImageName,'AVERAGES');
+orig_averages    = orig_data_full(avg_mask_orig,:);
+orig_data = orig_data_full(~avg_mask_orig,:);
+
+%% Read Modified CSV 
+mod_data_full    = readtable(mod_csv_file);
+avg_mask_mod     = strcmp(mod_data_full.ImageName,'AVERAGES');
+mod_averages     = mod_data_full(avg_mask_mod,:);
+mod_data = mod_data_full(~avg_mask_mod,:);
+
+%% Ensure matching rows
+if height(orig_data) ~= height(mod_data)
+    error('Row count mismatch: original has %d, modified has %d.', ...
+        height(orig_data), height(mod_data));
+end
+for i = 1:height(orig_data)
+    if ~strcmp(orig_data.ImageName{i}, mod_data.ImageName{i})
+        error('Name mismatch at row %d: %s vs %s.', ...
+            i, orig_data.ImageName{i}, mod_data.ImageName{i});
+    end
+end
+
+fprintf('Total images: %d\n\n', height(orig_data));
+
+%% Build performance table (with fallback if present)
+cols = {'ImageName', 'DeltaE00_Orig','MSE_Orig','MAE_Orig','DeltaE76_Orig', ...
+        'DeltaE00_Mod','MSE_Mod','MAE_Mod','DeltaE76_Mod'};
+if any(strcmp(mod_data.Properties.VariableNames,'FallbackUsed'))
+    cols{end+1} = 'FallbackUsed';
+    performance_data = table(orig_data.ImageName, ...
+        orig_data.DeltaE00_Orig, orig_data.MSE_Orig, orig_data.MAE_Orig, orig_data.DeltaE76_Orig, ...
+        mod_data.DeltaE00_Mod,   mod_data.MSE_Mod,  mod_data.MAE_Mod,  mod_data.DeltaE76_Mod, ...
+        mod_data.FallbackUsed, ...
+        'VariableNames', cols);
+else
+    performance_data = table(orig_data.ImageName, ...
+        orig_data.DeltaE00_Orig, orig_data.MSE_Orig, orig_data.MAE_Orig, orig_data.DeltaE76_Orig, ...
+        mod_data.DeltaE00_Mod,   mod_data.MSE_Mod,  mod_data.MAE_Mod,  mod_data.DeltaE76_Mod, ...
+        'VariableNames', cols);
+end
+
+%% Print average performance (if present)
+if ~isempty(orig_averages)
+    fprintf('=== AVERAGE PERFORMANCE (ORIGINAL) ===\n');
+    fprintf('ΔE00:  %.2f\n', orig_averages.DeltaE00_Orig);
+    fprintf('MSE:   %.2f\n', orig_averages.MSE_Orig);
+    fprintf('MAE:   %.2f\n', orig_averages.MAE_Orig);
+    fprintf('ΔE76:  %.2f\n', orig_averages.DeltaE76_Orig);
+    if any(strcmp(orig_data_full.Properties.VariableNames,'Time_Orig'))
+        fprintf('Time:  %.3f s\n', orig_averages.Time_Orig);
+    end
+    fprintf('\n');
+end
+
+if ~isempty(mod_averages)
+    fprintf('=== AVERAGE PERFORMANCE (MODIFIED) ===\n');
+    fprintf('ΔE00:  %.2f\n', mod_averages.DeltaE00_Mod);
+    fprintf('MSE:   %.2f\n', mod_averages.MSE_Mod);
+    fprintf('MAE:   %.2f\n', mod_averages.MAE_Mod);
+    fprintf('ΔE76:  %.2f\n', mod_averages.DeltaE76_Mod);
+    if any(strcmp(mod_data_full.Properties.VariableNames,'Time_Mod'))
+        fprintf('Time:  %.3f s\n', mod_averages.Time_Mod);
+    end
+    fprintf('\n');
+end
+
+%% Count better/worse & fallback
+tol = 1e-2;
+better_idx = find(performance_data.DeltaE00_Mod < performance_data.DeltaE00_Orig - tol);
+worse_idx  = find(performance_data.DeltaE00_Mod > performance_data.DeltaE00_Orig + tol);
+
+fprintf('%d images where Modified ΔE00 is LOWER (better)\n', numel(better_idx));
+fprintf('%d images where Modified ΔE00 is HIGHER (worse)\n\n', numel(worse_idx));
+
+if any(strcmp(performance_data.Properties.VariableNames,'FallbackUsed'))
+    nfb = sum(performance_data.FallbackUsed);
+    fprintf('%d images triggered the fallback routine\n\n', nfb);
+end
+
+%% Top-N worst original ΔE00
+[~, order] = sort(performance_data.DeltaE00_Orig,'descend');
+N = min(100, height(performance_data));
+fprintf('Top %d images by original ΔE00:\n', N);
+for i = 1:N
+    idx = order(i);
+    fprintf('%2d) %s: orig=%.2f, mod=%.2f\n', ...
+        i, performance_data.ImageName{idx}, ...
+        performance_data.DeltaE00_Orig(idx), ...
+        performance_data.DeltaE00_Mod(idx));
+end
+fprintf('\nDone.\n');
+
+ %% Plot sorted ΔE00 distributions and overlay fallback cases
+if HIST && any(strcmp(performance_data.Properties.VariableNames,'FallbackUsed'))
+    topN = 120;
+
+    % Get indices of topN worst original DeltaE00
+    [~, sort_idx] = sort(performance_data.DeltaE00_Orig, 'descend');
+    selected_idx = sort_idx(1:topN);
+
+    fprintf('\n=== TOP %d WORST IMAGES (BY ORIGINAL \\DeltaE_{2000}) ===\n', topN);
+    fprintf('ORIGINAL: ΔE00 = %.2f, ΔE76 = %.2f, MAE = %.2f, MSE = %.2f, Time = %.3f s\n', ...
+        mean(performance_data.DeltaE00_Orig(selected_idx)), ...
+        mean(performance_data.DeltaE76_Orig(selected_idx)), ...
+        mean(performance_data.MAE_Orig(selected_idx)), ...
+        mean(performance_data.MSE_Orig(selected_idx)), ...
+        mean(orig_data_full.Time_Orig(selected_idx)) );
+    
+    fprintf('MODIFIED: ΔE00 = %.2f, ΔE76 = %.2f, MAE = %.2f, MSE = %.2f, Time = %.3f s\n', ...
+        mean(performance_data.DeltaE00_Mod(selected_idx)), ...
+        mean(performance_data.DeltaE76_Mod(selected_idx)), ...
+        mean(performance_data.MAE_Mod(selected_idx)), ...
+        mean(performance_data.MSE_Mod(selected_idx)), ...
+        mean(mod_data_full.Time_Mod(selected_idx)) );
+
+
+    % Sort those selected images from low to high
+    [~, order] = sort(performance_data.DeltaE00_Orig(selected_idx));
+    selected_idx = selected_idx(order);
+
+    % Pull values AFTER applying selected_idx
+    fb_mask    = logical(performance_data.FallbackUsed(selected_idx));
+    orig_vals  = performance_data.DeltaE00_Orig(selected_idx);
+    mod_vals   = performance_data.DeltaE00_Mod(selected_idx);
+
+    x = 1:topN;
+
+    % Plot
+    figure;
+    bar(x, orig_vals, 'FaceColor', [0.8, 0.8, 0.8], 'EdgeColor', 'none'); hold on;
+    bar(x(fb_mask), mod_vals(fb_mask), 0.5, ...
+        'FaceColor', [0.8500 0.3250 0.0980], 'EdgeColor', 'none');
+
+    xlabel('Image Index by Ascending \DeltaE_{2000}');
+    ylabel('\DeltaE_{2000}');
+    %title(sprintf('Top %d Images: Original vs Modified (Fallback)', topN));
+    legend({'Original', 'Modified (Fallback)'}, 'Location','northwest');
+    grid on;
+end
+
+%% Plot fallback-only comparison: original vs modified ΔE00
+if HIST && any(strcmp(performance_data.Properties.VariableNames,'FallbackUsed'))
+    % Get indices of fallback-triggered images
+    fallback_indices = find(performance_data.FallbackUsed);
+
+    % Sort those fallback images by their original ΔE00
+    [~, fb_order] = sort(performance_data.DeltaE00_Orig(fallback_indices));
+    sorted_fb_idx = fallback_indices(fb_order);
+
+    fprintf('\n=== FALLBACK-TRIGGERED IMAGES ===\n');
+    fprintf('ORIGINAL: ΔE00 = %.2f, ΔE76 = %.2f, MAE = %.2f, MSE = %.2f, Time = %.3f s\n', ...
+        mean(performance_data.DeltaE00_Orig(fallback_indices)), ...
+        mean(performance_data.DeltaE76_Orig(fallback_indices)), ...
+        mean(performance_data.MAE_Orig(fallback_indices)), ...
+        mean(performance_data.MSE_Orig(fallback_indices)), ...
+        mean(orig_data_full.Time_Orig(fallback_indices)) );
+    
+    fprintf('MODIFIED: ΔE00 = %.2f, ΔE76 = %.2f, MAE = %.2f, MSE = %.2f, Time = %.3f s\n', ...
+        mean(performance_data.DeltaE00_Mod(fallback_indices)), ...
+        mean(performance_data.DeltaE76_Mod(fallback_indices)), ...
+        mean(performance_data.MAE_Mod(fallback_indices)), ...
+        mean(performance_data.MSE_Mod(fallback_indices)), ...
+        mean(mod_data_full.Time_Mod(fallback_indices)) );
+
+    % Get corresponding de2000 values
+    fb_orig_vals = performance_data.DeltaE00_Orig(sorted_fb_idx);
+    fb_mod_vals  = performance_data.DeltaE00_Mod(sorted_fb_idx);
+
+    x_fb = 1:length(sorted_fb_idx);
+
+    % Summarize accurayc of fallback 
+    if any(strcmp(performance_data.Properties.VariableNames,'FallbackUsed'))
+        fallback_indices = find(performance_data.FallbackUsed);
+        fb_improved = sum(performance_data.DeltaE00_Mod(fallback_indices) < ...
+                          performance_data.DeltaE00_Orig(fallback_indices) - tol);
+        fb_worsened = sum(performance_data.DeltaE00_Mod(fallback_indices) > ...
+                          performance_data.DeltaE00_Orig(fallback_indices) + tol);
+        fb_total = numel(fallback_indices);
+        fb_accuracy = 100 * fb_improved / fb_total;
+    
+        fprintf('\n=== Fallback Routine Effectiveness Summary ===\n');
+        fprintf('Total fallback-triggered images: %d\n', fb_total);
+        fprintf('Improved by fallback: %d\n', fb_improved);
+        fprintf('Worsened by fallback: %d\n', fb_worsened);
+        fprintf('Fallback accuracy: %.2f%%\n', fb_accuracy);
+    end
+
+
+    % Plot
+    figure;
+    bar(x_fb, fb_orig_vals, 'FaceColor', [0.7 0.7 0.7], 'EdgeColor', 'none'); hold on;
+    bar(x_fb, fb_mod_vals, 0.5, 'FaceColor', [0.8500 0.3250 0.0980], 'EdgeColor', 'none');
+
+    xlabel('Fallback Image Index by Ascending ΔE_{2000}');
+    ylabel('\DeltaE_{2000}');
+    %title('ΔE_{00} for Fallback-Triggered Images: Original vs Modified');
+    legend({ ...
+        'Original','Modified (Fallback)'}, 'Location', 'northwest');
+    grid on;
+end
+
+
+%% Optional display of worst cases
+if DISP
+    fprintf('Press ENTER to view worst-case images...\n');
+    pause;
+    for ii = 1:numel(worse_idx)
+        idx = worse_idx(ii);
+        name = performance_data.ImageName{idx};
+        dO   = performance_data.DeltaE00_Orig(idx);
+        dM   = performance_data.DeltaE00_Mod(idx);
+        fprintf('Displaying %s (orig=%.2f, mod=%.2f)\n', name, dO, dM);
+        I_in = imread(fullfile(in_base, name));
+        meta = get_metadata(name,'Rendered_Cube+','');
+        gt   = imread(fullfile(gt_base, meta.gt_filename));
+        I_mod = model.correctImage(im2double(I_in), [], 0.25, false, true, true);
+        figure('Name',name,'NumberTitle','off');
+        subplot(1,4,1), imshow(I_in), title('Input');
+        subplot(1,4,2), imshow(gt),   title('Ground Truth');
+        subplot(1,4,3), imshow(I_mod),title(sprintf('Modified\nΔE=%.2f',dM));
+        if USE_MODEL
+            I_orig = model.correctImage(im2double(I_in));
+            subplot(1,4,4), imshow(I_orig), title(sprintf('Original\nΔE=%.2f',dO));
+        end
+        drawnow;
+        fprintf('Press ENTER for next...\n'); pause; close;
+    end
+end
