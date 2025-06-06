@@ -1,6 +1,6 @@
 # Enhanced Post-Capture Automatic White Balance for sRGB Images
 
-Thesis Report at Calpoly Digital Commons: https://digitalcommons.calpoly.edu/theses/2997/
+Thesis Report at Cal Poly Digital Commons: https://digitalcommons.calpoly.edu/theses/2997/
 
 Reference code for thesis work: [When Color Constancy Goes Wrong:
 Correcting Improperly White-Balanced Images.](http://openaccess.thecvf.com/content_CVPR_2019/papers/Afifi_When_Color_Constancy_Goes_Wrong_Correcting_Improperly_White-Balanced_Images_CVPR_2019_paper.pdf) Mahmoud Afifi, Brian Price, Scott Cohen, and Michael S. Brown, CVPR 2019. 
